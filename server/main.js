@@ -1,5 +1,6 @@
 import { Meteor } from 'meteor/meteor';
 import { Accounts } from 'meteor/accounts-base';
+import { Messages } from '/imports/startup/both/collections.js'
 
 //const PeerInfo = require('peer-info')
 const PeerId = require('peer-id')

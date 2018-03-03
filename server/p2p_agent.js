@@ -1,6 +1,7 @@
 'use strict'
 /* eslint-disable no-console */
 import { Meteor } from 'meteor/meteor';
+import { Messages } from '/imports/startup/both/collections.js'
 
 const PeerId = require('peer-id')
 const PeerInfo = require('peer-info')
@@ -8,13 +9,25 @@ const Node = require('./libp2p-bundle.js')
 const pull = require('pull-stream')
 const Pushable = require('pull-pushable')
 const waterfall = require('async/waterfall')
-const p = Pushable()
+var abortCb = require('pull-stream/util/abort-cb')
 
 let p2p_status = []
 //let listenerInfo = {}
 //let nodes = {}
 //let send_msg = {}
 //let dial_peer = {}
+
+const pub = Meteor.publish('message.private', function() {
+  if (!this.userId) {
+    return this.ready();
+  }
+
+  return Lists.find({
+    userId: this.userId
+  }, {
+    fields: Lists.publicFields
+  });
+});
 
 // Find this list at: https://github.com/ipfs/js-ipfs/blob/master/src/core/runtime/config-nodejs.json
 const bootstrapers = [
@@ -37,83 +50,66 @@ Meteor.methods({
       throw new Meteor.Error("logged-out", "The user must be logged in to initialize the p2p messaging."); 
     if (p2p_status[userId] === undefined)
       p2p_status[userId]={}
-    if (p2p_status[userId].send_msg === undefined)
+    if (!(p2p_status[userId].send_msg))
       throw new Meteor.Error("need-dial-peer", "The p2p hasn't dialed the peer."); 
     p2p_status[userId].send_msg(msg)
+    //Messages.insert({text:msg})
   },
 
-  FindPeer(peer_id){
+  DialPeer(peer_id){
     let userId = this.userId;
+
     const user = Meteor.user()
     if (user === null)
       throw new Meteor.Error("logged-out", "The user must be logged in to initialize the p2p messaging."); 
+
     if (p2p_status[userId] === undefined)
       p2p_status[userId]={}
+
+    const p = Pushable(Meteor.bindEnvironment((err) => {
+      p2p_status[userId].send_msg=null
+      console.log('stream closed!')
+    }))
+
     if (p2p_status[userId].node === undefined)
       throw new Meteor.Error("p2p-not-inited", "Please get the P2P ID first."); 
-    //var syncCreateId = Meteor.wrapAsync(PeerId.createFromB58String)
-    //const peerId = syncCreateId(peer_id)
-    //const peerId = new PeerId(Buffer.from(peer_id))
+
     const peerId = PeerId.createFromB58String(peer_id)
     var syncFindPeer = Meteor.wrapAsync(p2p_status[userId].node.peerRouting.findPeer)
-    const peer = syncFindPeer(peerId)
-    let ma_str=""
-    //p2p_status[userId].node.peerRouting.findPeer(peerId,(err,peer)=>{
-    //  if (err)
-    //    console.log(err)
-    //  else {
-        peer.multiaddrs.forEach((ma) => ma_str += ma.toString() + " ")
-        console.log(ma_str)
-    //  }
-    //})
-    return ma_str
-  },
+    //const peerInfo = syncFindPeer(peerId)
+    const peerInfo = p2p_status["YjrvEXNmseDwhQxZd"].node.peerInfo
 
-  DialPeer(listener_id){
-    const user = Meteor.user()
-    if (user === null)
-      throw new Meteor.Error("logged-out", "The user must be logged in to initialize the p2p messaging."); 
-    let userId = this.userId;
-    if (p2p_status[userId] === undefined)
-      p2p_status[userId]={}
-    if (p2p_status[userId].node === undefined)
-      throw new Meteor.Error("p2p-not-inited", "Please get the P2P ID first."); 
-    if (p2p_status[userId].dial_peer === listener_id){
-      if (p2p_status[userId].send_msg!==undefined)
-        return "connected"
-    }
-    const peerId = PeerId.createFromB58String(listener_id) 
-    var syncFindPeer = Meteor.wrapAsync(p2p_status[userId].node.peerRouting.findPeer)
-    const peerInfo = syncFindPeer(peerId)
-    //p2p_status[userId].node.dialProtocol(listener_peerId, 
-    p2p_status[userId].node.dialProtocol(peerInfo, 
-          '/chat/1.0.0', (err,conn) => {
-      if (err) {
-        console.log(err)
-        throw err
-      }
-      console.log('nodeA dialed to nodeB on protocol: /chat/1.0.0')
-      console.log('Type a message and see what happens')
-      // Write operation. Data sent as a buffer
+    p2p_status[userId].node.dialProtocol(peerInfo,
+        '/gtchat/1.0.0', Meteor.bindEnvironment((err, conn) => {
+      if (err) { throw err }
+
+      console.log('nodeA dialed to nodeB on protocol: /gtchat/1.0.0')
+
       pull(
         p,
-        conn
-      )
-      // Sink, data converted from buffer to utf8 string
-      pull(
-        conn,
-        pull.map((data) => {
-          return data.toString('utf8').replace('\n', '')
+        pull.map((data)=>{
+          //console.log(data.toString())
+          return data
         }),
-        pull.drain(console.log)
+        conn,
+        pull.map(Meteor.bindEnvironment((data)=>{
+          //console.log(data.toString())
+          Messages.insert({text:data.toString()})
+          return data
+        })),
+        pull.drain((data) => {
+          if (data)
+            console.log('received echo:', data.toString())
+          else
+            console.log('received echo:', data)
+        })
       )
-
       p2p_status[userId].send_msg=(msg)=>{
-        p.push(msg)
+        p.push(Buffer.from(msg))
+        //p.end()
       }
-      p2p_status[userId].dial_peer=listener_id
-    })
-    return "connecting"
+    }))
+    return "Connected"
   },
 
   InitP2P(){
@@ -144,55 +140,6 @@ Meteor.methods({
 
     var syncCreateFromJson = Meteor.wrapAsync(PeerId.createFromJSON)
     const peerId = syncCreateFromJson(user.peerIdJson)
-/*
-    //(user.peerIdJson, (err, peerId) => {
-    //  if (err) {
-    //    throw err
-    //  }
-      const peerListener = new PeerInfo(peerId)
-      peerListener.multiaddrs.add('/ip4/0.0.0.0/tcp/0')
-
-      const nodeListener = new Node(peerListener,
-        null, //peerBook
-        {dht:true,bootstrap:bootstrapers})
-
-      p2p_status[userId].node = nodeListener
-      nodeListener.start((err) => {
-        if (err) {
-          throw err
-        }
-
-        //nodeListener.swarm.on('peer-mux-established', (peerInfo) => {
-        //  console.log(peerInfo.id.toB58String())
-        //})
-
-        nodeListener.handle('/chat/1.0.0', (protocol, conn) => {
-          pull(
-            p,
-            conn
-          )
-
-          pull(
-            conn,
-            pull.map((data) => {
-              const s = data.toString('utf8').replace('\n', '')
-              console.log('received:'+s)
-              return 'echo:'+s
-            }),
-            //pull.drain(console.log)
-            conn
-          )
-        })
-
-        console.log('Listener ready, listening on:')
-        peerListener.multiaddrs.forEach((ma) => {
-          console.log(ma.toString() + '/ipfs/' + peerId.toB58String())
-        })
-        p2p_status[userId].listenerInfo = peerListener;
-      })
-    //}))
-    return user.peerIdJson.id
-*/
     createNode(peerId, (err, node) => {
        p2p_status[userId].node = node;
     })
@@ -202,17 +149,45 @@ Meteor.methods({
 })
 
 function createNode(peerId, callback){
-let node
-waterfall([
+  let node
+  const p = Pushable(function (err) {
+    console.log('stream closed!')
+  })
+ waterfall([
   (cb) => PeerInfo.create(peerId,cb),
   (peerInfo, cb) => {
     peerInfo.multiaddrs.add('/ip4/0.0.0.0/tcp/0')
     node = new Node(peerInfo,
       null, //peerBook
       {dht:true,bootstrap:bootstrapers})
+    node.switch.on('peer-mux-established', (peerInfo) => {
+      console.log('received dial to me from:', peerInfo.id.toB58String())
+    })
+
+    node.handle('/gtchat/1.0.0', (protocol, conn) => {
+      pull(
+        p,
+        pull.map((data)=>{
+          //console.log("Listener receive:",data.toString())
+          return data
+        }),
+        conn,
+        pull.map((data)=>{
+          //console.log("Listener receive:",data.toString())
+          p.push(data) //echo
+          return data
+        }),
+        pull.drain((data) => {
+          if (data)
+            console.log('Listener received:', data.toString())
+          else
+            console.log('Listener received:',data)
+        })
+      )
+    })
     node.start(cb)
   }
-], (err) => {
+ ], (err) => {
   if (err) { throw err }
 
   node.on('peer:discovery', (peer) => {
@@ -221,8 +196,9 @@ waterfall([
   })
 
   node.on('peer:connect', (peer) => {
-    console.log('Connection established to:', peer.id.toB58String())
+    console.log('Connection established to:', 
+      node.peerInfo.id.toB58String(), '->', peer.id.toB58String())
   })
   callback(null,node)
-})
+ })
 }

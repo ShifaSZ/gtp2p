@@ -1,5 +1,33 @@
 import React from 'react'
 import { Meteor } from 'meteor/meteor';
+import { Mongo } from 'meteor/mongo'
+import { Messages } from '/imports/startup/both/collections.js'
+
+//const msgHandle = Meteor.subscribe('message.private');
+let myHandle = Meteor.subscribe('messages');
+let ready_cb=null
+Tracker.autorun(() => {
+  const isReady = myHandle.ready();
+  if (isReady && ready_cb !== null)
+    ready_cb()
+  console.log(`Handle is ${isReady ? 'ready' : 'not ready'}`);  
+});
+
+function set_ready_cb(cb) {
+  ready_cb = cb;
+}
+
+function sendGetMsg(enter_msg){
+    if (enter_msg !== null)
+      Messages.insert({ text:enter_msg });
+    // Return an array of my messages.
+    if (!myHandle.ready())
+      console.log("Subscribption is not ready.")
+    const myMessages = Messages.find().fetch();
+    let showMsg=""
+    myMessages.map((msg)=> showMsg = showMsg+msg.text+'\n')
+    return showMsg
+  }
 
 export class App extends React.Component {
   constructor() {
@@ -10,6 +38,7 @@ export class App extends React.Component {
       peer_id:"",
       dial_status:"no connection",
       messages:"",
+      serverMsg:"",
       reminder:""};
 
     this.handleSubmit = this.handleSubmit.bind(this);
@@ -18,6 +47,17 @@ export class App extends React.Component {
     this.handleEnterMsg = this.handleEnterMsg.bind(this);
     this.handleMessageChange = this.handleMessageChange.bind(this);
     this.handleDial = this.handleDial.bind(this);
+    this.handleEnterSvrMsg = this.handleEnterSvrMsg.bind(this);
+    this.handleSendSvrMsg = this.handleSendSvrMsg.bind(this);
+  }
+
+  updateMessage=()=>{
+    const msg = sendGetMsg(null)
+    this.setState({messages:msg})
+  }
+
+  componentDidMount(){
+    set_ready_cb(this.updateMessage)
   }
 
   handleGetId(event) {
@@ -37,8 +77,8 @@ export class App extends React.Component {
   }
 
   handleDial(event) {
-    //Meteor.call("DialPeer",this.state.peer_id,(err,result) => {
-    Meteor.call("FindPeer",this.state.peer_id,(err,result) => {
+    Meteor.call("DialPeer",this.state.peer_id,(err,result) => {
+    //Meteor.call("FindPeer",this.state.peer_id,(err,result) => {
     //Meteor.call("TestP2P",this.state.peer_id,(err,result) => {
       if (err){
         const err_msg = "Error found:"+err
@@ -46,7 +86,7 @@ export class App extends React.Component {
         console.log(err_msg)
       }
       else {
-        this.setState({dial_status:"Dial results: "+result})
+        this.setState({dial_status:result})
       }
     });
   }
@@ -61,14 +101,43 @@ export class App extends React.Component {
     this.setState({enter_msg:msg});
   }
 
+  handleEnterSvrMsg(event) {
+    const msg = event.target.value;
+    this.setState({serverMsg:msg});
+  }
+
+  handleSendSvrMsg(event) {
+    //Meteor.call("DialPeer",this.state.peer_id,(err,result) => {
+    //Meteor.call("FindPeer",this.state.peer_id,(err,result) => {
+    //Meteor.call("TestP2P",this.state.peer_id,(err,result) => {
+    Meteor.call("SendMessage",this.state.serverMsg,(err,result) => {
+      if (err){
+        const err_msg = "Error found:"+err
+        console.log(err_msg)
+      }
+      else {
+        console.log("Call SendMessage Success.")
+      }
+    });
+  }
+
   handleSubmit(event) {
     event.preventDefault();
     if (this.state.enter_msg === "") {
       this.setState({reminder:"You enter nothing for sending"})
       return
     }
-    const msg = this.state.messages + "me:" + this.state.enter_msg+"\n";
-    this.setState({messages:msg,enter_msg:"",reminder:""});
+    //const showMsg = sendGetMsg(this.state.enter_msg)
+    Meteor.call("SendMessage",this.state.enter_msg,(err,result) => {
+      if (err){
+        const err_msg = "Error found:"+err
+        console.log(err_msg)
+      }
+    });
+    this.setState({
+      //messages:showMsg,
+      enter_msg:"",
+      reminder:""});
   }
 
   render() {
@@ -97,3 +166,10 @@ export class App extends React.Component {
     )
   }
 }
+/*
+        <br />
+        <label>Message from server:</label>
+        <input type="text" value={this.serverMsg}
+           onChange={this.handleEnterSvrMsg} />
+        <button onClick={this.handleSendSvrMsg}> Send Svr </button>
+*/
